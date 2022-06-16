@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING
 from dvc_objects.fs import LocalFileSystem
 from dvc_objects.fs.system import inode as get_inode
 from dvc_objects.fs.utils import relpath
+from fsspec.utils import tokenize
 
-from .hash_info import HashInfo
+from dvc_data.db.cache import CacheDB, CacheObject
+
 from .utils import get_mtime_and_size
 
 if TYPE_CHECKING:
@@ -65,12 +67,14 @@ class State(StateBase):  # pylint: disable=too-many-instance-attributes
             return
 
         links_dir = os.path.join(tmp_dir, "links")
-        md5s_dir = os.path.join(tmp_dir, "md5s")
+        hashes_dir = os.path.join(tmp_dir, "hashes", "local")
         self.links = Cache(links_dir, eviction_policy="least-recently-used")
-        self.md5s = Cache(md5s_dir, eviction_policy="least-recently-used")
+
+        from dvc_objects.fs.implementations.local import localfs
+
+        self.hashes = CacheDB(localfs, hashes_dir)
 
     def close(self):
-        self.md5s.close()
         self.links.close()
 
     def save(self, path, fs, hash_info):
@@ -80,22 +84,16 @@ class State(StateBase):  # pylint: disable=too-many-instance-attributes
             path (str): path to save hash for.
             hash_info (HashInfo): hash to save.
         """
-
         if not isinstance(fs, LocalFileSystem):
             return
 
-        mtime, size = get_mtime_and_size(path, fs, self.ignore)
-        inode = get_inode(path)
+        oid = tokenize(path)
+        checksum = fs.checksum(path)
 
-        logger.debug(
-            "state save (%s, %s, %s) %s",
-            inode,
-            mtime,
-            str(size),
-            hash_info.value,
-        )
+        obj = CacheObject(checksum, hash_info)
+        obj.serialize()
 
-        self.md5s[inode] = (mtime, str(size), hash_info.value)
+        self.hashes.add(obj.path, obj.fs, oid)
 
     def get(self, path, fs):
         """Gets the hash for the specified path info. Hash will be
@@ -113,19 +111,16 @@ class State(StateBase):  # pylint: disable=too-many-instance-attributes
         if not isinstance(fs, LocalFileSystem):
             return None, None
 
+        oid = tokenize(path)
         try:
-            mtime, size = get_mtime_and_size(path, fs, self.ignore)
+            obj = self.hashes.get(oid)
         except FileNotFoundError:
             return None, None
 
-        inode = get_inode(path)
-
-        value = self.md5s.get(inode)
-
-        if not value or value[0] != mtime or value[1] != str(size):
+        if obj.checksum != fs.checksum(path):
             return None, None
 
-        return Meta(size=size), HashInfo("md5", value[2])
+        return Meta(), obj.hash_info
 
     def save_link(self, path, fs):
         """Adds the specified path to the list of links created by dvc. This

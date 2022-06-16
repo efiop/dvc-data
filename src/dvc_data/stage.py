@@ -1,8 +1,6 @@
-import errno
 import hashlib
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
@@ -18,8 +16,6 @@ if TYPE_CHECKING:
     from dvc_objects.fs.base import AnyFSPath, FileSystem
 
     from .hashfile.db import HashFileDB
-    from .hashfile.hash_info import HashInfo
-    from .objects.tree import Tree
 
 
 DefaultIgnoreFile = ".dvcignore"
@@ -87,7 +83,6 @@ def _build_objects(
     fs,
     name,
     ignore: "Ignore" = None,
-    jobs=None,
     no_progress_bar=False,
     **kwargs,
 ):
@@ -108,10 +103,7 @@ def _build_objects(
                 **kwargs,
             )
         )
-        with ThreadPoolExecutor(
-            max_workers=jobs if jobs is not None else fs.hash_jobs
-        ) as executor:
-            yield from executor.map(worker, walk_iterator)
+        yield from map(worker, walk_iterator)
 
 
 def _iter_objects(path, fs, name, **kwargs):
@@ -142,7 +134,10 @@ def _build_tree(path, fs, name, **kwargs):
         # Yes, this is a BUG, as long as we permit "/" in
         # filenames on Windows and "\" on Unix
 
-        key = fs.path.relparts(file_path, path)
+        # NOTE: we are sure that file_path starts with path here, so we can
+        # cut prefix directly and split into parts instead of using a more
+        # robust but slower relparts()
+        key = tuple(file_path[len(path) + 1 :].split(fs.sep))
         assert key
         tree.add(key, meta, obj.hash_info)
 
@@ -219,96 +214,6 @@ def _get_staging(odb: "HashFileDB") -> "ReferenceHashFileDB":
     return ReferenceHashFileDB(fs, path, state=state)
 
 
-def _load_raw_dir_obj(odb: "HashFileDB", hash_info: "HashInfo") -> "Tree":
-    from dvc_objects.errors import ObjectFormatError
-
-    from .objects.tree import Tree
-
-    try:
-        raw = hash_info.as_raw()
-        oid = raw.value
-        tree = Tree.load(odb, raw)
-        assert oid
-        odb.check(oid)
-        tree.hash_info = hash_info
-        tree.oid = hash_info.value
-    except ObjectFormatError as exc:
-        raise FileNotFoundError(
-            errno.ENOENT,
-            "No such object",
-            odb.oid_to_path(hash_info.as_raw().value),
-        ) from exc
-
-    return tree
-
-
-def _load_from_state(
-    odb: "HashFileDB",
-    staging: "ReferenceHashFileDB",
-    path: "AnyFSPath",
-    fs: "FileSystem",
-    name: str,
-    dry_run: bool,
-) -> Tuple["HashFileDB", "Meta", "HashFile"]:
-    from dvc_objects.errors import ObjectFormatError
-
-    from . import check, load
-    from .objects.tree import Tree
-
-    state = odb.state
-    meta, hash_info = state.get(path, fs)
-    if not hash_info:
-        raise FileNotFoundError
-
-    for odb_ in (odb, staging):
-        if not odb_.exists(hash_info.value):
-            continue
-
-        try:
-            obj = load(odb, hash_info)
-            check(odb, obj, check_hash=False)
-        except (ObjectFormatError, FileNotFoundError):
-            continue
-
-        if isinstance(obj, Tree):
-            meta.nfiles = len(obj)
-        assert obj.hash_info.name == name
-        return odb_, meta, obj
-
-    if not hash_info.isdir:
-        raise FileNotFoundError
-
-    # Try loading the raw dir object saved by `stage`, see below and #7390
-    tree = _load_raw_dir_obj(odb, hash_info)
-    meta.nfiles = len(tree)
-    assert tree.hash_info.name == name
-
-    if not dry_run:
-        assert tree.fs
-        for key, _, hi in tree:
-            staging.add(
-                fs.path.join(path, *key),
-                fs,
-                hi.value,
-                hardlink=False,
-                verify=False,
-            )
-
-        staging.add(
-            tree.path,
-            tree.fs,
-            hash_info.value,
-            hardlink=False,
-        )
-
-        raw = staging.get(hash_info.value)
-        tree.fs = raw.fs
-        tree.path = raw.path
-
-    logger.debug("loaded tree '%s' from raw dir obj", tree)
-    return staging, meta, tree
-
-
 def _stage_external_tree_info(odb, tree, name):
     # NOTE: used only for external outputs. Initial reasoning was to be
     # able to validate .dir files right in the workspace (e.g. check s3
@@ -356,12 +261,6 @@ def stage(
 
     details = fs.info(path)
     staging = _get_staging(odb)
-    if odb:
-        try:
-            return _load_from_state(odb, staging, path, fs, name, dry_run)
-        except FileNotFoundError:
-            pass
-
     if details["type"] == "directory":
         meta, obj = _stage_tree(
             path,
@@ -391,8 +290,5 @@ def stage(
             upload_odb=odb if upload else None,
             dry_run=dry_run,
         )
-
-    if odb and odb.state and obj.hash_info:
-        odb.state.save(path, fs, obj.hash_info)
 
     return staging, meta, obj
