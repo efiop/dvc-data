@@ -7,6 +7,7 @@ from dvc_objects.fs.callbacks import DEFAULT_CALLBACK
 from ..hashfile.hash_info import HashInfo
 from ..hashfile.meta import Meta
 from ..hashfile.tree import Tree
+from .index import DataIndex, DataIndexEntry
 
 if TYPE_CHECKING:
     from dvc_objects.fs.base import FileSystem
@@ -165,3 +166,22 @@ def save(
         _save_dir_entry(index, key, odb=odb)
 
     return transferred
+
+
+def restore(index: "BaseDataIndex", odb: "HashFileDB"):
+    restored = DataIndex()
+
+    for key, entry in index.iteritems():
+        if not entry.meta.isdir and not odb.exists(entry.hash_info.value):
+            continue
+
+        restored[key] = DataIndexEntry(
+            key=key,
+            hash_info=entry.hash_info,
+            meta=entry.meta,
+            fs=odb.fs,
+            path=odb.oid_to_path(entry.hash_info.value),
+            odb=odb,
+        )
+
+    return restored

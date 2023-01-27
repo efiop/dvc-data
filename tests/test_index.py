@@ -10,9 +10,11 @@ from dvc_data.index import (
     add,
     build,
     checkout,
+    diff,
     md5,
     read_db,
     read_json,
+    restore,
     save,
     update,
     view,
@@ -125,6 +127,9 @@ def test_save(tmp_upath, odb, as_filesystem):
     assert odb.exists("1f69c66028c35037e8bf67e5bc4ceb6a.dir")
     assert odb.exists("c157a79031e1c40f85931829bc5fc552")
     assert odb.exists("258622b1688250cb619f3c9ccaefb7eb")
+
+    restored = restore(index, odb)
+    assert not set(diff(index, restored, hash_only=True))
 
 
 def test_build(tmp_upath, as_filesystem):
