@@ -20,6 +20,14 @@ class DataFileSystem(AbstractFileSystem):  # pylint:disable=abstract-method
         self.index = index
 
     @cached_property
+    def fsid(self):
+        from dvc_data.index.save import build_tree
+
+        _, tree = build_tree(self.index, ())
+
+        return f"data_{tree.hash_info.value}"
+
+    @cached_property
     def path(self):
         from dvc_objects.fs.path import Path
 

@@ -78,6 +78,7 @@ def test_fs(tmp_upath, odb, as_filesystem):
     )
     index.storage_map.add_cache(ObjectStorage((), odb))
     fs = DataFileSystem(index)
+    assert fs.fsid == "data_5b1a2e40fb56d46d00fcbb81113c2e15.dir"
     assert fs.exists("foo")
     assert fs.cat("foo") == b"foo\n"
     assert fs.ls("/", detail=False) == ["/foo", "/data"]

@@ -62,10 +62,10 @@ def build_tree(
     for key, entry in index.iteritems(prefix=prefix):
         if key == prefix or entry.meta and entry.meta.isdir:
             continue
-        assert entry.meta and entry.hash_info
         tree_key = key[len(prefix) :]
         tree.add(tree_key, entry.meta, entry.hash_info)
-        tree_meta.size += entry.meta.size or 0
+        if entry.meta:
+            tree_meta.size += entry.meta.size or 0
         tree_meta.nfiles += 1
     tree.digest()
     return tree_meta, tree
