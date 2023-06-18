@@ -384,6 +384,9 @@ def apply(
     _create_dirs(diff.dirs_create, path, fs)
 
     def onerror(_src_path, dest_path, _exc):
+        print(
+            f"OLOLO failed to {_src_path} -> {dest_path} because {str(_exc)}"
+        )
         failed.append(dest_path)
 
     _create_files(
