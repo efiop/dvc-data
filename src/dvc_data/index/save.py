@@ -8,6 +8,8 @@ from ..hashfile.hash import DEFAULT_ALGORITHM
 from ..hashfile.hash_info import HashInfo
 from ..hashfile.meta import Meta
 from ..hashfile.tree import Tree
+from ..hashfile.transfer import _log_exception, TransferResult
+from ..hashfile.status import status
 
 if TYPE_CHECKING:
     from dvc_objects.fs.base import FileSystem
@@ -160,19 +162,39 @@ def save(
             if cache not in odb_map:
                 odb_map[cache] = defaultdict(list)
             odb_map[cache][fs].append((path, oid))
+
+    failed = set()
+
+    def _error(oid: str, exc: BaseException):
+        if isinstance(exc, FileExistsError) or (
+            os.name == "nt"
+            and exc.__context__
+            and isinstance(exc.__context__, FileExistsError)
+        ):
+            logger.debug("'%s' already exists, skipping", to_path)
+        _log_exception(oid, exc)
+        failed.add(HashInfo(cache.hash_name, oid))
+
+    all_oids = set()
     for cache, fs_map in odb_map.items():
         for fs, args in fs_map.items():
             paths, oids = zip(*args)
+            st = status(
+                cache,
+                [HashInfo(cache.hash_name, oid) for oid in oids],
+            )
             transferred += cache.add(
                 list(paths),
                 fs,
-                list(oids),
+                list(hi.value for hi in st.missing),
                 callback=callback,
                 batch_size=jobs,
+                on_error=_error,
                 **kwargs,
             )
+            all_oids.update(st.missing)
 
     for key in dir_entries:
         _save_dir_entry(index, key, odb=odb)
 
-    return transferred
+    return TransferResult(all_oids - failed, failed)

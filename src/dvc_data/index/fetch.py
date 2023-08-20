@@ -86,7 +86,9 @@ def fetch(
                 failed += len(result.failed)
             elif isinstance(cache, ObjectStorage):
                 md5(fs_index, check_meta=False)
-                fetched += save(fs_index, jobs=jobs, callback=cb)
+                result = save(fs_index, jobs=jobs, callback=cb)
+                fetched += len(result.transferred)
+                failed += len(result.failed)
             else:
                 old = build(cache.path, cache.fs)
                 diff = compare(old, fs_index)
